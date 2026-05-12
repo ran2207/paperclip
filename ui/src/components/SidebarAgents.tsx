@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "@/lib/router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  ChevronRight,
   MoreHorizontal,
   PauseCircle,
   Pencil,
@@ -76,22 +77,86 @@ function sortAgents(agents: Agent[], sortMode: AgentSidebarSortMode): Agent[] {
   return sorted;
 }
 
+const AGENT_TREE_INDENT_PX = 14;
+const AGENT_TREE_BASE_PADDING_PX = 12;
+const AGENT_TREE_COLLAPSED_STORAGE_PREFIX = "paperclip:agent-sidebar:collapsed";
+
+function getAgentTreeCollapsedStorageKey(
+  companyId: string,
+  userId: string | null | undefined,
+): string {
+  return `${AGENT_TREE_COLLAPSED_STORAGE_PREFIX}:${companyId}:${userId ?? "anon"}`;
+}
+
+function readAgentTreeCollapsed(storageKey: string): Set<string> {
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeAgentTreeCollapsed(storageKey: string, ids: Set<string>) {
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(Array.from(ids)));
+  } catch {
+    // Ignore storage write failures in restricted browser contexts.
+  }
+}
+
+type AgentTreeNode = {
+  agent: Agent;
+  children: AgentTreeNode[];
+};
+
+function buildAgentTree(agents: Agent[]): AgentTreeNode[] {
+  const visibleIds = new Set(agents.map((agent) => agent.id));
+  const nodeById = new Map<string, AgentTreeNode>();
+  for (const agent of agents) {
+    nodeById.set(agent.id, { agent, children: [] });
+  }
+  const roots: AgentTreeNode[] = [];
+  for (const agent of agents) {
+    const node = nodeById.get(agent.id);
+    if (!node) continue;
+    const parentId = agent.reportsTo && visibleIds.has(agent.reportsTo) ? agent.reportsTo : null;
+    if (parentId) {
+      nodeById.get(parentId)?.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  return roots;
+}
+
 function SidebarAgentItem({
   activeAgentId,
   activeTab,
   agent,
+  depth,
   disabled,
+  expanded,
+  hasChildren,
   isMobile,
   onPauseResume,
+  onToggleExpanded,
   runCount,
   setSidebarOpen,
 }: {
   activeAgentId: string | null;
   activeTab: string | null;
   agent: Agent;
+  depth: number;
   disabled: boolean;
+  expanded: boolean;
+  hasChildren: boolean;
   isMobile: boolean;
   onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
+  onToggleExpanded: (agentId: string) => void;
   runCount: number;
   setSidebarOpen: (open: boolean) => void;
 }) {
@@ -108,6 +173,7 @@ function SidebarAgentItem({
     : isBudgetPaused
       ? "Budget paused"
       : pauseResumeLabel;
+  const paddingLeftPx = AGENT_TREE_BASE_PADDING_PX + depth * AGENT_TREE_INDENT_PX;
 
   return (
     <div className="group/agent relative flex items-center">
@@ -118,12 +184,32 @@ function SidebarAgentItem({
           if (isMobile) setSidebarOpen(false);
         }}
         className={cn(
-          "flex min-w-0 flex-1 items-center gap-2.5 px-3 py-1.5 pr-8 text-[13px] font-medium transition-colors",
+          "flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-8 text-[13px] font-medium transition-colors",
           isActive
             ? "bg-accent text-foreground"
             : "text-foreground/80 hover:bg-accent/50 hover:text-foreground"
         )}
+        style={{ paddingLeft: `${paddingLeftPx}px` }}
       >
+        {hasChildren ? (
+          <button
+            type="button"
+            aria-label={expanded ? `Collapse reports of ${agent.name}` : `Expand reports of ${agent.name}`}
+            aria-expanded={expanded}
+            className="-ml-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent/60 hover:text-foreground"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleExpanded(agent.id);
+            }}
+          >
+            <ChevronRight
+              className={cn("h-3 w-3 transition-transform", expanded && "rotate-90")}
+            />
+          </button>
+        ) : (
+          <span aria-hidden className="-ml-1 inline-block h-4 w-4 shrink-0" />
+        )}
         <AgentIcon icon={agent.icon} className="shrink-0 h-3.5 w-3.5 text-muted-foreground" />
         <span className="flex-1 truncate">{agent.name}</span>
         {(agent.pauseReason === "budget" || runCount > 0) && (
@@ -192,6 +278,73 @@ function SidebarAgentItem({
   );
 }
 
+function renderAgentTreeNodes({
+  nodes,
+  depth,
+  activeAgentId,
+  activeTab,
+  collapsedAgentIds,
+  isMobile,
+  liveCountByAgent,
+  onPauseResume,
+  onToggleExpanded,
+  pendingAgentIds,
+  setSidebarOpen,
+}: {
+  nodes: AgentTreeNode[];
+  depth: number;
+  activeAgentId: string | null;
+  activeTab: string | null;
+  collapsedAgentIds: Set<string>;
+  isMobile: boolean;
+  liveCountByAgent: Map<string, number>;
+  onPauseResume: (agent: Agent, action: "pause" | "resume") => void;
+  onToggleExpanded: (agentId: string) => void;
+  pendingAgentIds: Set<string>;
+  setSidebarOpen: (open: boolean) => void;
+}): ReactNode[] {
+  const elements: ReactNode[] = [];
+  for (const node of nodes) {
+    const hasChildren = node.children.length > 0;
+    const expanded = hasChildren && !collapsedAgentIds.has(node.agent.id);
+    elements.push(
+      <SidebarAgentItem
+        key={node.agent.id}
+        activeAgentId={activeAgentId}
+        activeTab={activeTab}
+        agent={node.agent}
+        depth={depth}
+        disabled={pendingAgentIds.has(node.agent.id)}
+        expanded={expanded}
+        hasChildren={hasChildren}
+        isMobile={isMobile}
+        onPauseResume={onPauseResume}
+        onToggleExpanded={onToggleExpanded}
+        runCount={liveCountByAgent.get(node.agent.id) ?? 0}
+        setSidebarOpen={setSidebarOpen}
+      />,
+    );
+    if (hasChildren && expanded) {
+      elements.push(
+        ...renderAgentTreeNodes({
+          nodes: node.children,
+          depth: depth + 1,
+          activeAgentId,
+          activeTab,
+          collapsedAgentIds,
+          isMobile,
+          liveCountByAgent,
+          onPauseResume,
+          onToggleExpanded,
+          pendingAgentIds,
+          setSidebarOpen,
+        }),
+      );
+    }
+  }
+  return elements;
+}
+
 export function SidebarAgents() {
   const [open, setOpen] = useState(true);
   const [pendingAgentIds, setPendingAgentIds] = useState<Set<string>>(() => new Set());
@@ -250,6 +403,43 @@ export function SidebarAgents() {
   const sortedAgents = useMemo(
     () => sortAgents(orderedAgents, sortMode),
     [orderedAgents, sortMode],
+  );
+  const agentTree = useMemo(() => buildAgentTree(sortedAgents), [sortedAgents]);
+
+  const collapsedStorageKey = useMemo(() => {
+    if (!selectedCompanyId) return null;
+    return getAgentTreeCollapsedStorageKey(selectedCompanyId, currentUserId);
+  }, [currentUserId, selectedCompanyId]);
+
+  const [collapsedAgentIds, setCollapsedAgentIds] = useState<Set<string>>(() => {
+    if (!collapsedStorageKey) return new Set();
+    return readAgentTreeCollapsed(collapsedStorageKey);
+  });
+
+  useEffect(() => {
+    if (!collapsedStorageKey) {
+      setCollapsedAgentIds(new Set());
+      return;
+    }
+    setCollapsedAgentIds(readAgentTreeCollapsed(collapsedStorageKey));
+  }, [collapsedStorageKey]);
+
+  const toggleAgentExpanded = useCallback(
+    (agentId: string) => {
+      setCollapsedAgentIds((current) => {
+        const next = new Set(current);
+        if (next.has(agentId)) {
+          next.delete(agentId);
+        } else {
+          next.add(agentId);
+        }
+        if (collapsedStorageKey) {
+          writeAgentTreeCollapsed(collapsedStorageKey, next);
+        }
+        return next;
+      });
+    },
+    [collapsedStorageKey],
   );
 
   const agentMatch = location.pathname.match(/^\/(?:[^/]+\/)?agents\/([^/]+)(?:\/([^/]+))?/);
@@ -364,21 +554,19 @@ export function SidebarAgents() {
         onRadioValueChange: persistSortMode,
       }}
     >
-      {sortedAgents.map((agent: Agent) => {
-        const runCount = liveCountByAgent.get(agent.id) ?? 0;
-        return (
-          <SidebarAgentItem
-            key={agent.id}
-            activeAgentId={activeAgentId}
-            activeTab={activeTab}
-            agent={agent}
-            disabled={pendingAgentIds.has(agent.id)}
-            isMobile={isMobile}
-            onPauseResume={(targetAgent, action) => pauseResumeAgent.mutate({ agent: targetAgent, action })}
-            runCount={runCount}
-            setSidebarOpen={setSidebarOpen}
-          />
-        );
+      {renderAgentTreeNodes({
+        nodes: agentTree,
+        depth: 0,
+        activeAgentId,
+        activeTab,
+        collapsedAgentIds,
+        isMobile,
+        liveCountByAgent,
+        onPauseResume: (targetAgent, action) =>
+          pauseResumeAgent.mutate({ agent: targetAgent, action }),
+        onToggleExpanded: toggleAgentExpanded,
+        pendingAgentIds,
+        setSidebarOpen,
       })}
     </SidebarSection>
   );
