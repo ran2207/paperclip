@@ -10,6 +10,7 @@ import {
   Bot,
   Code,
   Gem,
+  Github,
   MousePointer2,
   Sparkles,
   Terminal,
@@ -72,6 +73,12 @@ const adapterDisplayMap: Record<string, AdapterDisplayInfo> = {
     description: "Local Codex agent",
     icon: Code,
     recommended: true,
+  },
+  copilot_local: {
+    label: "GitHub Copilot CLI",
+    description: "Local GitHub Copilot agent",
+    icon: Github,
+    experimental: true,
   },
   gemini_local: {
     label: "Gemini CLI",

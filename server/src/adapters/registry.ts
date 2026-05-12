@@ -48,6 +48,11 @@ import {
   modelProfiles as codexModelProfiles,
 } from "@paperclipai/adapter-codex-local";
 import {
+  execute as copilotExecute,
+  testEnvironment as copilotTestEnvironment,
+} from "@paperclipai/adapter-copilot-local/server";
+import { agentConfigurationDoc as copilotAgentConfigurationDoc } from "@paperclipai/adapter-copilot-local";
+import {
   execute as cursorExecute,
   listCursorSkills,
   syncCursorSkills,
@@ -296,6 +301,18 @@ const codexLocalAdapter: ServerAdapterModule = {
   getQuotaWindows: codexGetQuotaWindows,
 };
 
+const copilotLocalAdapter: ServerAdapterModule = {
+  type: "copilot_local",
+  execute: copilotExecute,
+  testEnvironment: copilotTestEnvironment,
+  models: [],
+  supportsLocalAgentJwt: true,
+  supportsInstructionsBundle: true,
+  instructionsPathKey: "instructionsFilePath",
+  requiresMaterializedRuntimeSkills: false,
+  agentConfigurationDoc: copilotAgentConfigurationDoc,
+};
+
 const cursorLocalAdapter: ServerAdapterModule = {
   type: "cursor",
   execute: cursorExecute,
@@ -481,6 +498,7 @@ function registerBuiltInAdapters() {
     acpxLocalAdapter,
     claudeLocalAdapter,
     codexLocalAdapter,
+    copilotLocalAdapter,
     openCodeLocalAdapter,
     piLocalAdapter,
     cursorCloudAdapter,
