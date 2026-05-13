@@ -38,12 +38,7 @@ COPY packages/adapters/copilot-local/package.json packages/adapters/copilot-loca
 COPY packages/plugins/plugin-llm-wiki/package.json packages/plugins/plugin-llm-wiki/
 COPY patches/ patches/
 
-# RUN pnpm install --frozen-lockfile
-# TODO: Revert to --frozen-lockfile once pnpm-lock.yaml is regenerated.
-# The lockfile is currently out of sync with the workspace (missing entries
-# for packages/adapters/copilot-local), causing TS build errors.
-# Fix: run `pnpm install --lockfile-only` locally and commit the result.
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 FROM base AS build
 WORKDIR /app
