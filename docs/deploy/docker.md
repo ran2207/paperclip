@@ -39,23 +39,23 @@ docker run --name paperclip \
   paperclip-local
 ```
 
-## Azure Web App for Containers
+## Azure Web App
 
 This repo includes an additional GitHub Actions workflow for Azure Web App deployment:
 
-- `.github/workflows/azure-webapp.yml` manually deploys `ghcr.io/<owner>/<repo>:latest` to Azure Web App with `AZURE_DEPLOYMENT_PROFILE`
+- `.github/workflows/azure-webapp.yml` manually builds Paperclip, creates a portable Node deployment bundle for a standard Azure Web App, and also builds/pushes a Docker image to `azacrlmsnp.azurecr.io`
 
 Required GitHub configuration:
 
-- Update `AZURE_WEBAPP_NAME` in `.github/workflows/azure-webapp.yml`
+- Repository variable: `AZURE_WEBAPP_NAME`
 - Repository secret: `AZURE_DEPLOYMENT_PROFILE` (the publish profile downloaded from the Web App)
+- Repository secrets for ACR push: `ACR_USERNAME`, `ACR_PASSWORD`
 
-Required Azure Web App settings:
+Notes:
 
-- `WEBSITES_PORT=3100`
-- Set `HOME=/home` and `PAPERCLIP_HOME=/home/paperclip` if you want Paperclip data to persist across restarts
-
-If the `ghcr.io` package is private, configure the Web App's container registry credentials in Azure first or make the package public.
+- The workflow deploys a built package to App Service, so the Web App does not need to be configured as a custom-container app.
+- The workflow sets the startup command to run Paperclip with `HOST=0.0.0.0`, `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, and `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`.
+- You still need normal runtime app settings in Azure for your deployment, such as `BETTER_AUTH_SECRET`, database settings, API keys, and optionally `PAPERCLIP_PUBLIC_URL` if you use a custom domain.
 
 ## Data Persistence
 

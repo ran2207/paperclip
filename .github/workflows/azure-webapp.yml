@@ -12,20 +12,28 @@ concurrency:
 
 env:
   AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
-  IMAGE_NAME: ghcr.io/${{ github.repository }}:latest
+  ACR_NAME: azacrlmsnp
+  ACR_LOGIN_SERVER: azacrlmsnp.azurecr.io
+  IMAGE_NAME: paperclip
+  NODE_VERSION: 20
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Validate deployment settings
         env:
           AZURE_WEBAPP_NAME: ${{ env.AZURE_WEBAPP_NAME }}
           AZURE_DEPLOYMENT_PROFILE: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
         run: |
           if [ -z "$AZURE_WEBAPP_NAME" ]; then
-            echo "::error::Set AZURE_WEBAPP_NAME in .github/workflows/azure-webapp.yml before deploying."
+            echo "::error::Missing repository variable AZURE_WEBAPP_NAME."
             exit 1
           fi
 
@@ -34,9 +42,60 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy latest container image
+          if [ -z "$ACR_USERNAME" ] || [ -z "$ACR_PASSWORD" ]; then
+            echo "::error::Missing ACR credentials. Set ACR_USERNAME and ACR_PASSWORD."
+            exit 1
+          fi
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build application
+        run: pnpm build
+
+      - name: Prepare Azure deployment bundle
+        run: |
+          rm -rf server/ui-dist .azure-webapp-package
+          cp -R ui/dist server/ui-dist
+          test -f server/ui-dist/index.html
+          pnpm --filter @paperclipai/server --prod deploy --legacy .azure-webapp-package
+          test -f .azure-webapp-package/dist/index.js
+
+      - name: Log in to ACR
+        env:
+          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
+          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
+        run: echo "$ACR_PASSWORD" | docker login ${{ env.ACR_LOGIN_SERVER }} --username "$ACR_USERNAME" --password-stdin
+
+      - name: Build and push Docker image to ACR
+        env:
+          IMAGE_SHA_TAG: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          IMAGE_LATEST_TAG: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+        run: |
+          docker build -t "$IMAGE_SHA_TAG" -t "$IMAGE_LATEST_TAG" .
+          docker push "$IMAGE_SHA_TAG"
+          docker push "$IMAGE_LATEST_TAG"
+
+      - name: Deploy application package to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
-          images: ${{ env.IMAGE_NAME }}
+          package: ./.azure-webapp-package
+          clean: true
+          startup-command: >-
+            HOST=0.0.0.0
+            PAPERCLIP_DEPLOYMENT_MODE=authenticated
+            PAPERCLIP_DEPLOYMENT_EXPOSURE=public
+            node dist/index.js
