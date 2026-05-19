@@ -67,8 +67,3 @@ jobs:
           publish-profile: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
           package: .
           clean: true
-          startup-command: >-
-            HOST=0.0.0.0
-            PAPERCLIP_DEPLOYMENT_MODE=authenticated
-            PAPERCLIP_DEPLOYMENT_EXPOSURE=public
-            node server/dist/index.js

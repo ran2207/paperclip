@@ -55,7 +55,10 @@ Notes:
 
 - The workflow does not build the Node app in GitHub Actions. It deploys source and expects App Service build automation to produce `server/dist` and `ui/dist`.
 - Configure the Web App with `SCM_DO_BUILD_DURING_DEPLOYMENT=true` so App Service runs build automation during deployment. If your Linux App Service requires it, also set `ENABLE_ORYX_BUILD=true`.
-- The workflow sets the startup command to run Paperclip with `HOST=0.0.0.0`, `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, and `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`, then starts `server/dist/index.js`.
+- When this workflow uses `publish-profile` auth, `azure/webapps-deploy@v3` cannot set `startup-command`. Configure the Linux Web App startup command in Azure instead.
+- Set the Linux Web App startup command to `node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js`.
+- Plain `node server/dist/index.js` is not sufficient for this repo layout because workspace packages such as `@paperclipai/db` export TypeScript source paths, and the runtime needs the same `tsx` loader that the Docker image uses.
+- Set runtime values like `HOST=0.0.0.0`, `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, and `PAPERCLIP_DEPLOYMENT_EXPOSURE=public` as App Service application settings, not inside the startup command.
 - You still need normal runtime app settings in Azure for your deployment, such as `BETTER_AUTH_SECRET`, database settings, API keys, and optionally `PAPERCLIP_PUBLIC_URL` if you use a custom domain.
 
 ## Data Persistence
