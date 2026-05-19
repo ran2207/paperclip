@@ -1,0 +1,41 @@
+name: Deploy Azure Web App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: azure-webapp-${{ github.ref_name || github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}:latest
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate deployment settings
+        env:
+          AZURE_WEBAPP_NAME: ${{ env.AZURE_WEBAPP_NAME }}
+          AZURE_DEPLOYMENT_PROFILE: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
+        run: |
+          if [ -z "$AZURE_WEBAPP_NAME" ]; then
+            echo "::error::Set AZURE_WEBAPP_NAME in .github/workflows/azure-webapp.yml before deploying."
+            exit 1
+          fi
+
+          if [ -z "$AZURE_DEPLOYMENT_PROFILE" ]; then
+            echo "::error::Missing repository secret AZURE_DEPLOYMENT_PROFILE."
+            exit 1
+          fi
+
+      - name: Deploy latest container image
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
+          images: ${{ env.IMAGE_NAME }}
