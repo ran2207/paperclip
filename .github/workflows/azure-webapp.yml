@@ -11,59 +11,38 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
-  ACR_LOGIN_SERVER: azacrlmsnp.azurecr.io
+  AZURE_WEBAPP_NAME: paperclip-ai
+  ACR_NAME: azacrlmsnp
   IMAGE_NAME: paperclip
+  RESOURCE_GROUP: rg-ai-agent
 
 jobs:
-  deploy:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Validate deployment settings
-        env:
-          AZURE_WEBAPP_NAME: ${{ env.AZURE_WEBAPP_NAME }}
-          AZURE_DEPLOYMENT_PROFILE: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
-          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-        run: |
-          if [ -z "$AZURE_WEBAPP_NAME" ]; then
-            echo "::error::Missing repository variable AZURE_WEBAPP_NAME."
-            exit 1
-          fi
-
-          if [ -z "$AZURE_DEPLOYMENT_PROFILE" ]; then
-            echo "::error::Missing repository secret AZURE_DEPLOYMENT_PROFILE."
-            exit 1
-          fi
-
-          if [ -z "$ACR_USERNAME" ] || [ -z "$ACR_PASSWORD" ]; then
-            echo "::error::Missing ACR credentials. Set ACR_USERNAME and ACR_PASSWORD."
-            exit 1
-          fi
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Log in to ACR
-        env:
-          ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-          ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-        run: echo "$ACR_PASSWORD" | docker login ${{ env.ACR_LOGIN_SERVER }} --username "$ACR_USERNAME" --password-stdin
+        run: az acr login --name ${{ env.ACR_NAME }}
 
-      - name: Build and push Docker image to ACR
-        env:
-          IMAGE_SHA_TAG: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
-          IMAGE_LATEST_TAG: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:latest
+      - name: Build and push image
         run: |
-          docker build -t "$IMAGE_SHA_TAG" -t "$IMAGE_LATEST_TAG" .
-          docker push "$IMAGE_SHA_TAG"
-          docker push "$IMAGE_LATEST_TAG"
+          IMAGE_TAG=${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.run_number }}
+          docker build -t $IMAGE_TAG .
+          docker push $IMAGE_TAG
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Deploy application package to Azure Web App
+      - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
-          package: .
-          clean: true
+          images: ${{ env.IMAGE_TAG }}
