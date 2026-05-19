@@ -15,7 +15,7 @@ env:
   AZURE_WEBAPP_NAME: paperclip-ai
   ACR_NAME: azacrlmsnp
   IMAGE_NAME: paperclip
-  RESOURCE_GROUP: rg-ai-agent
+  RESOURCE_GROUP: rg-ai-agents
 
 jobs:
   build-and-deploy:
