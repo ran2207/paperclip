@@ -43,7 +43,7 @@ docker run --name paperclip \
 
 This repo includes an additional GitHub Actions workflow for Azure Web App deployment:
 
-- `.github/workflows/azure-webapp.yml` manually builds Paperclip, creates a portable Node deployment bundle for a standard Azure Web App, and also builds/pushes a Docker image to `azacrlmsnp.azurecr.io`
+- `.github/workflows/azure-webapp.yml` deploys the repository source to a standard Azure Web App and also builds/pushes a Docker image to `azacrlmsnp.azurecr.io`
 
 Required GitHub configuration:
 
@@ -53,8 +53,9 @@ Required GitHub configuration:
 
 Notes:
 
-- The workflow deploys a built package to App Service, so the Web App does not need to be configured as a custom-container app.
-- The workflow sets the startup command to run Paperclip with `HOST=0.0.0.0`, `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, and `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`.
+- The workflow does not build the Node app in GitHub Actions. It deploys source and expects App Service build automation to produce `server/dist` and `ui/dist`.
+- Configure the Web App with `SCM_DO_BUILD_DURING_DEPLOYMENT=true` so App Service runs build automation during deployment. If your Linux App Service requires it, also set `ENABLE_ORYX_BUILD=true`.
+- The workflow sets the startup command to run Paperclip with `HOST=0.0.0.0`, `PAPERCLIP_DEPLOYMENT_MODE=authenticated`, and `PAPERCLIP_DEPLOYMENT_EXPOSURE=public`, then starts `server/dist/index.js`.
 - You still need normal runtime app settings in Azure for your deployment, such as `BETTER_AUTH_SECRET`, database settings, API keys, and optionally `PAPERCLIP_PUBLIC_URL` if you use a custom domain.
 
 ## Data Persistence

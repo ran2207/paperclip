@@ -12,10 +12,8 @@ concurrency:
 
 env:
   AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
-  ACR_NAME: azacrlmsnp
   ACR_LOGIN_SERVER: azacrlmsnp.azurecr.io
   IMAGE_NAME: paperclip
-  NODE_VERSION: 20
 
 jobs:
   deploy:
@@ -47,31 +45,6 @@ jobs:
             exit 1
           fi
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9.15.4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build application
-        run: pnpm build
-
-      - name: Prepare Azure deployment bundle
-        run: |
-          rm -rf server/ui-dist .azure-webapp-package
-          cp -R ui/dist server/ui-dist
-          test -f server/ui-dist/index.html
-          pnpm --filter @paperclipai/server --prod deploy --legacy .azure-webapp-package
-          test -f .azure-webapp-package/dist/index.js
-
       - name: Log in to ACR
         env:
           ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
@@ -92,10 +65,10 @@ jobs:
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           publish-profile: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
-          package: ./.azure-webapp-package
+          package: .
           clean: true
           startup-command: >-
             HOST=0.0.0.0
             PAPERCLIP_DEPLOYMENT_MODE=authenticated
             PAPERCLIP_DEPLOYMENT_EXPOSURE=public
-            node dist/index.js
+            node server/dist/index.js
