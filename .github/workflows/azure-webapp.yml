@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  AZURE_WEBAPP_NAME: ${{ var.AZURE_WEBAPP_NAME }}
+  AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
   IMAGE_NAME: ghcr.io/${{ github.repository }}:latest
 
 jobs:
@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Validate deployment settings
         env:
-          AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME }}
+          AZURE_WEBAPP_NAME: ${{ env.AZURE_WEBAPP_NAME }}
           AZURE_DEPLOYMENT_PROFILE: ${{ secrets.AZURE_DEPLOYMENT_PROFILE }}
         run: |
           if [ -z "$AZURE_WEBAPP_NAME" ]; then
