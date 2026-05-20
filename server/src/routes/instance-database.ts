@@ -81,13 +81,19 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
- * True when the server is running under the dev supervisor (`pnpm dev` →
- * dev-runner → `tsx watch`). The dev-runner sets PAPERCLIP_DEV_SERVER_STATUS_FILE
- * on the spawned process; its presence means a file-watcher is live and will
- * restart the process on a source change.
+ * True when the server is running under a dev file-watcher that will restart
+ * the process on a source change. Two supervisors qualify:
+ *  - `pnpm dev` (watch mode) → dev-watch.ts → `tsx watch`, which sets
+ *    PAPERCLIP_DEV_WATCH on the server process.
+ *  - dev-runner "dev" mode, which sets PAPERCLIP_DEV_SERVER_STATUS_FILE and
+ *    restarts the child when watched paths go dirty.
+ * Either way, touching the entry module triggers a restart.
  */
 function isUnderDevWatcher(): boolean {
-  return Boolean(process.env.PAPERCLIP_DEV_SERVER_STATUS_FILE?.trim());
+  return Boolean(
+    process.env.PAPERCLIP_DEV_WATCH?.trim() ||
+      process.env.PAPERCLIP_DEV_SERVER_STATUS_FILE?.trim(),
+  );
 }
 
 /**

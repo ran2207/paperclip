@@ -14,7 +14,11 @@ const child = spawn(
   [tsxCliPath, "watch", ...ignoreArgs, "src/index.ts"],
   {
     cwd: serverRoot,
-    env: process.env,
+    // PAPERCLIP_DEV_WATCH marks the server process as running under the tsx
+    // file-watcher. The instance-database routes read it to decide whether a
+    // connection change can trigger an automatic restart (touch the entry
+    // module) or must fall back to the manual restart handoff.
+    env: { ...process.env, PAPERCLIP_DEV_WATCH: "1" },
     stdio: "inherit",
   },
 );
