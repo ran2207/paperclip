@@ -77,10 +77,26 @@ export interface LocalExportValidation {
   warnings: ValidationIssue[];
 }
 
+export interface TestConnectionResult {
+  reachable: boolean;
+  schemaPresent: boolean;
+  pendingMigrations: string[];
+  error?: string;
+}
+
 export const instanceDatabaseApi = {
   getStatus: () => api.get<InstanceDatabaseStatus>("/instance/database/status"),
   applyMigrations: () =>
     api.post<{ applied: string[] }>("/instance/database/migrate", {}),
+  testConnection: (connectionString: string) =>
+    api.post<TestConnectionResult>("/instance/database/test-connection", {
+      connectionString,
+    }),
+  setConnection: (connectionString: string) =>
+    api.post<{ persisted: boolean; restartRequired: boolean }>(
+      "/instance/database/connection",
+      { connectionString },
+    ),
   previewLocalExport: () =>
     api.get<LocalExportPreview>("/instance/database/local-export/preview"),
   validateLocalExport: (input: { preserveIds: boolean }) =>

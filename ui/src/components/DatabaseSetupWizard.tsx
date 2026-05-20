@@ -11,6 +11,8 @@ import {
   X,
   AlertTriangle,
   RefreshCw,
+  ChevronDown,
+  Plug,
 } from "lucide-react";
 import { Dialog, DialogPortal } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -104,6 +106,17 @@ export function DatabaseSetupWizard() {
       failures: LocalExportFailure[];
     } | null
   >(null);
+  // Restart handoff: set after a connection-string switch is persisted. The
+  // server must reboot to pick up the new config; the wizard polls until it
+  // comes back on the new connection. The snapshot is the pre-switch
+  // (mode, host, database) tuple — when the polled status differs from it and
+  // is reachable, the restart has landed.
+  const [restartPending, setRestartPending] = useState(false);
+  const [preRestartSnapshot, setPreRestartSnapshot] = useState<{
+    mode: string;
+    host: string | null;
+    database: string | null;
+  } | null>(null);
 
   const statusQuery = useQuery({
     queryKey: databaseStatusQueryKey,
@@ -125,6 +138,18 @@ export function DatabaseSetupWizard() {
       instanceDatabaseApi.validateLocalExport({ preserveIds: keepUrlsStable }),
     enabled: open && step === 3 && !skipImport,
     refetchOnWindowFocus: false,
+  });
+
+  // Polls the status endpoint while waiting for a post-switch restart. retry
+  // false + a fixed interval means failed fetches (server mid-restart) just
+  // schedule the next poll instead of surfacing an error.
+  const restartWatchQuery = useQuery({
+    queryKey: ["instance", "database", "status", "restart-watch"] as const,
+    queryFn: () => instanceDatabaseApi.getStatus(),
+    enabled: open && restartPending,
+    refetchInterval: restartPending ? 3000 : false,
+    retry: false,
+    gcTime: 0,
   });
 
   const migrate = useMutation({
@@ -166,7 +191,26 @@ export function DatabaseSetupWizard() {
     setSkipImport(false);
     setKeepUrlsStable(true);
     setImportResult(null);
+    setRestartPending(false);
+    setPreRestartSnapshot(null);
   }, [open]);
+
+  // Detect that a post-switch restart has landed: the polled status differs
+  // from the pre-switch snapshot and is reachable.
+  useEffect(() => {
+    if (!restartPending) return;
+    const s = restartWatchQuery.data;
+    if (!s || !s.reachable) return;
+    const snap = preRestartSnapshot;
+    const landed =
+      !snap || s.mode !== snap.mode || s.host !== snap.host || s.database !== snap.database;
+    if (!landed) return;
+    setRestartPending(false);
+    setPreRestartSnapshot(null);
+    setError(null);
+    void queryClient.invalidateQueries({ queryKey: databaseStatusQueryKey });
+    setStep(s.schemaPresent && s.pendingMigrations.length === 0 ? 3 : 2);
+  }, [restartPending, restartWatchQuery.data, preRestartSnapshot, queryClient]);
 
   const status = statusQuery.data;
   const isReady = useMemo(
@@ -212,6 +256,15 @@ export function DatabaseSetupWizard() {
     setSelection((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
+  function handleConnectionSwitched() {
+    setPreRestartSnapshot(
+      status
+        ? { mode: status.mode, host: status.host, database: status.database }
+        : null,
+    );
+    setRestartPending(true);
+  }
+
   if (!open) return null;
 
   return (
@@ -235,6 +288,14 @@ export function DatabaseSetupWizard() {
               </p>
             </div>
 
+            {restartPending ? (
+              <RestartHandoff
+                watchStatus={restartWatchQuery.data}
+                onRecheck={() => void restartWatchQuery.refetch()}
+                onClose={handleClose}
+              />
+            ) : (
+              <>
             <div className="flex items-center gap-0 px-6 border-b border-border">
               {STEPS.map(({ step: s, label, icon: Icon }) => (
                 <button
@@ -264,6 +325,7 @@ export function DatabaseSetupWizard() {
                   loading={statusQuery.isLoading}
                   fetchError={statusQuery.error}
                   onRefresh={() => statusQuery.refetch()}
+                  onConnectionSwitched={handleConnectionSwitched}
                 />
               )}
               {step === 2 && status && (
@@ -375,6 +437,8 @@ export function DatabaseSetupWizard() {
                 )}
               </div>
             </div>
+              </>
+            )}
           </div>
         </div>
       </DialogPortal>
@@ -387,11 +451,13 @@ function ConnectionStep({
   loading,
   fetchError,
   onRefresh,
+  onConnectionSwitched,
 }: {
   status: InstanceDatabaseStatus | undefined;
   loading: boolean;
   fetchError: unknown;
   onRefresh: () => void;
+  onConnectionSwitched: () => void;
 }) {
   if (loading) {
     return (
@@ -464,6 +530,202 @@ function ConnectionStep({
           value={<span className="text-xs font-mono text-muted-foreground">{status.tables.length}</span>}
         />
       </div>
+
+      <ConnectionEditor onConnectionSwitched={onConnectionSwitched} />
+    </div>
+  );
+}
+
+function ConnectionEditor({
+  onConnectionSwitched,
+}: {
+  onConnectionSwitched: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [connectionString, setConnectionString] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const test = useMutation({
+    mutationFn: (s: string) => instanceDatabaseApi.testConnection(s),
+    onMutate: () => setError(null),
+  });
+  const setConn = useMutation({
+    mutationFn: (s: string) => instanceDatabaseApi.setConnection(s),
+    onSuccess: () => onConnectionSwitched(),
+    onError: (err) =>
+      setError(err instanceof Error ? err.message : "Failed to save the connection."),
+  });
+
+  const trimmed = connectionString.trim();
+  const looksValid = /^postgres(ql)?:\/\//.test(trimmed);
+  const testedOk = test.data?.reachable === true;
+  // A test result only applies to the string it was run against. Editing the
+  // input after a successful test must re-gate the switch button.
+  const [testedString, setTestedString] = useState<string | null>(null);
+  const testIsCurrent = testedOk && testedString === trimmed;
+
+  if (!expanded) {
+    return (
+      <button
+        type="button"
+        onClick={() => setExpanded(true)}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+      >
+        <ChevronDown className="h-3 w-3 -rotate-90" />
+        Connect to a different database
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-border p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium">Connect to a different database</p>
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          Cancel
+        </button>
+      </div>
+
+      <div>
+        <label className="text-[11px] text-muted-foreground mb-1 block">
+          PostgreSQL connection string
+        </label>
+        <input
+          type="text"
+          spellCheck={false}
+          autoComplete="off"
+          className="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-xs font-mono outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground/40"
+          placeholder="postgres://user:password@host:5432/database"
+          value={connectionString}
+          onChange={(e) => {
+            setConnectionString(e.target.value);
+            setError(null);
+          }}
+        />
+        <p className="text-[10px] text-muted-foreground/70 mt-1">
+          Stored in the instance config file (mode 0600). The server must restart
+          to connect to it.
+        </p>
+      </div>
+
+      {test.data && (
+        test.data.reachable ? (
+          <div className="flex items-center gap-2 rounded-md border border-green-300 dark:border-green-500/40 bg-green-50 dark:bg-green-500/10 px-2.5 py-1.5 text-[11px] text-green-700 dark:text-green-300">
+            <Check className="h-3 w-3 shrink-0" />
+            <span>
+              Reachable.{" "}
+              {test.data.schemaPresent
+                ? `Schema present${
+                    test.data.pendingMigrations.length > 0
+                      ? `, ${test.data.pendingMigrations.length} pending migrations`
+                      : ""
+                  }.`
+                : "Schema not initialized — the wizard will run migrations."}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive">
+            <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+            <span>{test.data.error ?? "Could not connect."}</span>
+          </div>
+        )
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive">
+          <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2.5 text-xs"
+          disabled={!looksValid || test.isPending}
+          onClick={() => {
+            setTestedString(trimmed);
+            test.mutate(trimmed);
+          }}
+        >
+          {test.isPending ? (
+            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+          ) : (
+            <Plug className="h-3 w-3 mr-1" />
+          )}
+          {test.isPending ? "Testing…" : "Test connection"}
+        </Button>
+        <Button
+          size="sm"
+          className="h-7 px-2.5 text-xs"
+          disabled={!testIsCurrent || setConn.isPending}
+          onClick={() => setConn.mutate(trimmed)}
+        >
+          {setConn.isPending ? (
+            <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+          ) : (
+            <ArrowRight className="h-3 w-3 mr-1" />
+          )}
+          {setConn.isPending ? "Saving…" : "Switch database"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function RestartHandoff({
+  watchStatus,
+  onRecheck,
+  onClose,
+}: {
+  watchStatus: InstanceDatabaseStatus | undefined;
+  onRecheck: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div className="px-6 py-8 space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="bg-muted/50 p-2 rounded-md">
+          <RefreshCw className="h-5 w-5 text-muted-foreground animate-spin" />
+        </div>
+        <div>
+          <h3 className="text-sm font-medium">Restart required</h3>
+          <p className="text-xs text-muted-foreground">
+            The new connection is saved. Restart the Paperclip server to connect to it.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+        <p className="text-[11px] text-muted-foreground mb-1">In your terminal:</p>
+        <code className="text-xs font-mono">restart the Paperclip server (e.g. re-run pnpm dev)</code>
+      </div>
+
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Waiting for the server to come back on the new connection…
+        {watchStatus?.reachable ? " (reachable — confirming the switch)" : ""}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={onRecheck}>
+          <RefreshCw className="h-3.5 w-3.5 mr-1" />
+          Re-check now
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Close — I&rsquo;ll finish setup later
+        </Button>
+      </div>
+
+      <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
+        After the restart this wizard reopens automatically against the new
+        database if its schema needs setup.
+      </p>
     </div>
   );
 }

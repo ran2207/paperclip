@@ -13,6 +13,7 @@ import { validate } from "../middleware/validate.js";
 import { companyPortabilityService } from "../services/index.js";
 import type { StorageService } from "../storage/types.js";
 import { logger } from "../middleware/logger.js";
+import { readConfigFile, writeConfigFile } from "../config-file.js";
 import { assertBoardOrgAccess, getActorInfo } from "./authz.js";
 
 function assertCanManageInstanceSettings(req: Request) {
@@ -49,6 +50,58 @@ const localExportSelectionSchema = z.object({
 const localExportValidateSchema = z.object({
   preserveIds: z.boolean().optional().default(true),
 });
+
+const connectionStringField = z
+  .string()
+  .min(1)
+  .refine(
+    (s) => /^postgres(ql)?:\/\//.test(s.trim()),
+    "Connection string must start with postgres:// or postgresql://",
+  );
+
+const databaseConnectionSchema = z.object({
+  connectionString: connectionStringField,
+});
+
+/**
+ * Reject a promise that runs longer than `ms`. Used to bound connection
+ * probes — a wrong host behind a packet-dropping firewall can otherwise hang
+ * the request well past any sane timeout.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
+/**
+ * Turn a connection failure into a safe, generic message. NEVER returns the
+ * raw error text — postgres.js errors can echo the connection string, which
+ * carries the password. We surface only the error code when it's a recognised
+ * one, plus a fixed remediation hint.
+ */
+function describeConnectionFailure(err: unknown): string {
+  const code =
+    typeof err === "object" && err !== null && "code" in err
+      ? String((err as { code: unknown }).code)
+      : null;
+  switch (code) {
+    case "ENOTFOUND":
+    case "EAI_AGAIN":
+      return "Host not found — check the hostname in the connection string.";
+    case "ECONNREFUSED":
+      return "Connection refused — check the port and that the database accepts connections.";
+    case "28P01":
+      return "Authentication failed — check the username and password.";
+    case "3D000":
+      return "Database does not exist — check the database name.";
+    default:
+      return "Could not connect. Verify the host, port, database name, credentials, and SSL mode.";
+  }
+}
 
 export interface ValidationIssue {
   code: string;
@@ -182,6 +235,92 @@ export function instanceDatabaseRoutes(deps: InstanceDatabaseDeps) {
       releaseMutationLock();
     }
   });
+
+  router.post(
+    "/instance/database/test-connection",
+    validate(databaseConnectionSchema),
+    async (req, res) => {
+      assertCanManageInstanceSettings(req);
+      const { connectionString } = req.body as z.infer<typeof databaseConnectionSchema>;
+      // Read-only probe: inspectMigrations opens its own connection, runs a
+      // schema query, and closes. It doubles as a reachability check (throws
+      // on a bad host/credentials) and a schema-state check.
+      try {
+        const state = await withTimeout(
+          inspectMigrations(connectionString.trim()),
+          10_000,
+          "connection probe",
+        );
+        res.json({
+          reachable: true,
+          schemaPresent: state.tableCount > 0,
+          pendingMigrations:
+            state.status === "upToDate" ? [] : state.pendingMigrations,
+        });
+      } catch (err) {
+        res.json({
+          reachable: false,
+          schemaPresent: false,
+          pendingMigrations: [],
+          error: describeConnectionFailure(err),
+        });
+      }
+    },
+  );
+
+  router.post(
+    "/instance/database/connection",
+    validate(databaseConnectionSchema),
+    async (req, res) => {
+      assertCanManageInstanceSettings(req);
+      const { connectionString } = req.body as z.infer<typeof databaseConnectionSchema>;
+      const trimmed = connectionString.trim();
+
+      // The env var wins over the config file (see config.ts). Persisting to
+      // config.json would be silently ignored on the next boot, so refuse.
+      if (process.env.DATABASE_URL) {
+        throw unprocessable(
+          "DATABASE_URL is set in the environment, which overrides the config file. " +
+            "Change or unset that environment variable to manage the connection from here.",
+        );
+      }
+
+      // Validate before persisting — never write a connection we can't reach.
+      try {
+        await withTimeout(inspectMigrations(trimmed), 10_000, "connection probe");
+      } catch (err) {
+        throw unprocessable(describeConnectionFailure(err));
+      }
+
+      const current = readConfigFile();
+      if (!current) {
+        throw notFound(
+          "No instance config file found to update — this instance is environment-driven.",
+        );
+      }
+      writeConfigFile({
+        ...current,
+        database: {
+          ...current.database,
+          mode: "postgres",
+          connectionString: trimmed,
+        },
+      });
+
+      const actor = getActorInfo(req);
+      logger.info(
+        {
+          event: "instance.database.connection_changed",
+          actorType: actor.actorType,
+          actorId: actor.actorId,
+          // The connection string is NOT logged — it carries a password.
+        },
+        "Instance database connection string updated; restart required",
+      );
+
+      res.json({ persisted: true, restartRequired: true });
+    },
+  );
 
   router.get("/instance/database/local-export/preview", async (req, res) => {
     assertCanManageInstanceSettings(req);
