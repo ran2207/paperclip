@@ -1,4 +1,7 @@
 import { Router, type Request } from "express";
+import { existsSync, utimesSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
@@ -75,6 +78,42 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
       setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
     ),
   ]);
+}
+
+/**
+ * True when the server is running under the dev supervisor (`pnpm dev` →
+ * dev-runner → `tsx watch`). The dev-runner sets PAPERCLIP_DEV_SERVER_STATUS_FILE
+ * on the spawned process; its presence means a file-watcher is live and will
+ * restart the process on a source change.
+ */
+function isUnderDevWatcher(): boolean {
+  return Boolean(process.env.PAPERCLIP_DEV_SERVER_STATUS_FILE?.trim());
+}
+
+/**
+ * Ask the dev file-watcher to restart the server by bumping the mtime of the
+ * entry module. `tsx watch` (see server/scripts/dev-watch.ts) watches
+ * src/index.ts and restarts on any change event — a pure mtime touch counts,
+ * with no content mutation. This is the only programmatic restart hook the
+ * codebase exposes: the dev-runner has no restart endpoint or signal.
+ *
+ * Returns false (and does nothing) outside a watcher — e.g. production, where
+ * a restart instead comes from the container/process supervisor. The wizard
+ * falls back to the manual restart handoff in that case.
+ */
+function triggerDevServerRestart(): boolean {
+  if (!isUnderDevWatcher()) return false;
+  try {
+    // routes/instance-database.ts → ../index.ts is the watched entry module.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const entry = path.resolve(here, "../index.ts");
+    if (!existsSync(entry)) return false;
+    const now = new Date();
+    utimesSync(entry, now, now);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -308,17 +347,27 @@ export function instanceDatabaseRoutes(deps: InstanceDatabaseDeps) {
       });
 
       const actor = getActorInfo(req);
+      const autoRestart = isUnderDevWatcher();
       logger.info(
         {
           event: "instance.database.connection_changed",
           actorType: actor.actorType,
           actorId: actor.actorId,
+          autoRestart,
           // The connection string is NOT logged — it carries a password.
         },
         "Instance database connection string updated; restart required",
       );
 
-      res.json({ persisted: true, restartRequired: true });
+      // Restart only AFTER the response has fully flushed to the client —
+      // the watcher SIGTERMs this process within milliseconds of the touch.
+      if (autoRestart) {
+        res.on("finish", () => {
+          setTimeout(() => triggerDevServerRestart(), 150);
+        });
+      }
+
+      res.json({ persisted: true, restartRequired: true, autoRestart });
     },
   );
 

@@ -112,6 +112,7 @@ export function DatabaseSetupWizard() {
   // (mode, host, database) tuple — when the polled status differs from it and
   // is reachable, the restart has landed.
   const [restartPending, setRestartPending] = useState(false);
+  const [restartIsAutomatic, setRestartIsAutomatic] = useState(false);
   const [preRestartSnapshot, setPreRestartSnapshot] = useState<{
     mode: string;
     host: string | null;
@@ -192,6 +193,7 @@ export function DatabaseSetupWizard() {
     setKeepUrlsStable(true);
     setImportResult(null);
     setRestartPending(false);
+    setRestartIsAutomatic(false);
     setPreRestartSnapshot(null);
   }, [open]);
 
@@ -256,12 +258,13 @@ export function DatabaseSetupWizard() {
     setSelection((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  function handleConnectionSwitched() {
+  function handleConnectionSwitched(autoRestart: boolean) {
     setPreRestartSnapshot(
       status
         ? { mode: status.mode, host: status.host, database: status.database }
         : null,
     );
+    setRestartIsAutomatic(autoRestart);
     setRestartPending(true);
   }
 
@@ -291,6 +294,7 @@ export function DatabaseSetupWizard() {
             {restartPending ? (
               <RestartHandoff
                 watchStatus={restartWatchQuery.data}
+                automatic={restartIsAutomatic}
                 onRecheck={() => void restartWatchQuery.refetch()}
                 onClose={handleClose}
               />
@@ -457,7 +461,7 @@ function ConnectionStep({
   loading: boolean;
   fetchError: unknown;
   onRefresh: () => void;
-  onConnectionSwitched: () => void;
+  onConnectionSwitched: (autoRestart: boolean) => void;
 }) {
   if (loading) {
     return (
@@ -536,10 +540,27 @@ function ConnectionStep({
   );
 }
 
+/**
+ * Heuristic: does this connection string point at a transaction-mode
+ * connection pooler? Paperclip's postgres.js client uses prepared statements,
+ * which break on PgBouncer-style transaction poolers. Covers Neon (`-pooler`
+ * in the host) and Supabase (`.pooler.` host, port 6543).
+ */
+function looksLikePooler(connectionString: string): boolean {
+  try {
+    const url = new URL(connectionString);
+    if (url.hostname.toLowerCase().includes("pooler")) return true;
+    if (url.port === "6543") return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function ConnectionEditor({
   onConnectionSwitched,
 }: {
-  onConnectionSwitched: () => void;
+  onConnectionSwitched: (autoRestart: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [connectionString, setConnectionString] = useState("");
@@ -551,13 +572,14 @@ function ConnectionEditor({
   });
   const setConn = useMutation({
     mutationFn: (s: string) => instanceDatabaseApi.setConnection(s),
-    onSuccess: () => onConnectionSwitched(),
+    onSuccess: (result) => onConnectionSwitched(result.autoRestart),
     onError: (err) =>
       setError(err instanceof Error ? err.message : "Failed to save the connection."),
   });
 
   const trimmed = connectionString.trim();
   const looksValid = /^postgres(ql)?:\/\//.test(trimmed);
+  const pooledSuspected = looksLikePooler(trimmed);
   const testedOk = test.data?.reachable === true;
   // A test result only applies to the string it was run against. Editing the
   // input after a successful test must re-gate the switch button.
@@ -611,6 +633,18 @@ function ConnectionEditor({
           to connect to it.
         </p>
       </div>
+
+      {pooledSuspected && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300/60 dark:border-amber-500/40 bg-amber-50/50 dark:bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+          <span>
+            This looks like a connection-<strong>pooler</strong> endpoint. Paperclip
+            uses prepared statements, which fail on transaction-mode poolers — use
+            the <strong>direct</strong> (non-pooled) connection string instead. A
+            pooler can even pass the test below, then break at runtime.
+          </span>
+        </div>
+      )}
 
       {test.data && (
         test.data.reachable ? (
@@ -680,10 +714,12 @@ function ConnectionEditor({
 
 function RestartHandoff({
   watchStatus,
+  automatic,
   onRecheck,
   onClose,
 }: {
   watchStatus: InstanceDatabaseStatus | undefined;
+  automatic: boolean;
   onRecheck: () => void;
   onClose: () => void;
 }) {
@@ -694,17 +730,25 @@ function RestartHandoff({
           <RefreshCw className="h-5 w-5 text-muted-foreground animate-spin" />
         </div>
         <div>
-          <h3 className="text-sm font-medium">Restart required</h3>
+          <h3 className="text-sm font-medium">
+            {automatic ? "Restarting the server…" : "Restart required"}
+          </h3>
           <p className="text-xs text-muted-foreground">
-            The new connection is saved. Restart the Paperclip server to connect to it.
+            {automatic
+              ? "The new connection is saved. The server is restarting itself to connect to it — no action needed."
+              : "The new connection is saved. Restart the Paperclip server to connect to it."}
           </p>
         </div>
       </div>
 
-      <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
-        <p className="text-[11px] text-muted-foreground mb-1">In your terminal:</p>
-        <code className="text-xs font-mono">restart the Paperclip server (e.g. re-run pnpm dev)</code>
-      </div>
+      {!automatic && (
+        <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+          <p className="text-[11px] text-muted-foreground mb-1">In your terminal:</p>
+          <code className="text-xs font-mono">
+            restart the Paperclip server (e.g. re-run pnpm dev)
+          </code>
+        </div>
+      )}
 
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -723,8 +767,9 @@ function RestartHandoff({
       </div>
 
       <p className="text-[11px] text-muted-foreground/70 leading-relaxed">
-        After the restart this wizard reopens automatically against the new
-        database if its schema needs setup.
+        {automatic
+          ? "This usually takes a few seconds. If the server doesn't come back, restart it manually — the wizard will reconnect either way."
+          : "After the restart this wizard reopens automatically against the new database if its schema needs setup."}
       </p>
     </div>
   );

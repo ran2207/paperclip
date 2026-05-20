@@ -93,7 +93,7 @@ export const instanceDatabaseApi = {
       connectionString,
     }),
   setConnection: (connectionString: string) =>
-    api.post<{ persisted: boolean; restartRequired: boolean }>(
+    api.post<{ persisted: boolean; restartRequired: boolean; autoRestart: boolean }>(
       "/instance/database/connection",
       { connectionString },
     ),
