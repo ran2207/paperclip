@@ -1,4 +1,4 @@
-name: Deploy Azure Web App
+name: Deploy Azure Web App for Containers
 
 on:
   push:
@@ -50,3 +50,4 @@ jobs:
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           images: ${{ env.IMAGE_TAG }}
+          slot-name: production
