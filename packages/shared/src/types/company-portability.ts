@@ -42,6 +42,11 @@ export interface CompanyPortabilityCompanyManifestEntry {
   feedbackDataSharingConsentAt: string | null;
   feedbackDataSharingConsentByUserId: string | null;
   feedbackDataSharingTermsVersion: string | null;
+  // Optional source identity. See ImportBehaviorOptions.preserveIds in
+  // server/services/company-portability.ts.
+  id?: string;
+  issuePrefix?: string;
+  issueCounter?: number;
 }
 
 export interface CompanyPortabilitySidebarOrder {
@@ -63,6 +68,7 @@ export interface CompanyPortabilityProjectManifestEntry {
   executionWorkspacePolicy: Record<string, unknown> | null;
   workspaces: CompanyPortabilityProjectWorkspaceManifestEntry[];
   metadata: Record<string, unknown> | null;
+  id?: string;
 }
 
 export interface CompanyPortabilityProjectWorkspaceManifestEntry {
@@ -126,6 +132,7 @@ export interface CompanyPortabilityIssueManifestEntry {
   assigneeAdapterOverrides: Record<string, unknown> | null;
   comments: CompanyPortabilityIssueCommentManifestEntry[];
   metadata: Record<string, unknown> | null;
+  id?: string;
 }
 
 export interface CompanyPortabilityAgentManifestEntry {
@@ -144,6 +151,7 @@ export interface CompanyPortabilityAgentManifestEntry {
   permissions: Record<string, unknown>;
   budgetMonthlyCents: number;
   metadata: Record<string, unknown> | null;
+  id?: string;
 }
 
 export interface CompanyPortabilitySkillManifestEntry {

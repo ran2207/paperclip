@@ -2,6 +2,8 @@ import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "@/lib/r
 import { Button } from "@/components/ui/button";
 import { Layout } from "./components/Layout";
 import { OnboardingWizard } from "./components/OnboardingWizard";
+import { DatabaseSetupWizard } from "./components/DatabaseSetupWizard";
+import { DatabaseSetupAutoOpener } from "./components/DatabaseSetupAutoOpener";
 import { CloudAccessGate } from "./components/CloudAccessGate";
 import { Dashboard } from "./pages/Dashboard";
 import { DashboardLive } from "./pages/DashboardLive";
@@ -321,6 +323,8 @@ export function App() {
         </Route>
       </Routes>
       <OnboardingWizard />
+      <DatabaseSetupWizard />
+      <DatabaseSetupAutoOpener />
     </>
   );
 }

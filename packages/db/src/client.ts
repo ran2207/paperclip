@@ -50,6 +50,21 @@ export function createDb(url: string) {
   return drizzlePg(sql, { schema });
 }
 
+/**
+ * Open a short-lived Drizzle handle to an arbitrary Postgres URL alongside the
+ * primary connection — used when migrating data from one database into another
+ * (e.g. importing a local embedded instance into a fresh remote). Callers MUST
+ * call close() in a finally-block; the underlying postgres.js pool is dedicated
+ * to this handle and is not shared with createDb().
+ */
+export function openDb(url: string): { db: Db; close: () => Promise<void> } {
+  const sql = postgres(url, { max: 1, prepare: false });
+  return {
+    db: drizzlePg(sql, { schema }),
+    close: () => sql.end(),
+  };
+}
+
 export async function getPostgresDataDirectory(url: string): Promise<string | null> {
   const sql = createUtilitySql(url);
   try {

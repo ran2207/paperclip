@@ -138,6 +138,21 @@ function resolveSkillConflictStrategy(mode: ImportMode, collisionStrategy: Compa
   return collisionStrategy === "skip" ? "skip" as const : "rename" as const;
 }
 
+/**
+ * Extract the trailing integer from an issue identifier — `"ACM-42"` → `42`.
+ * Returns `null` if the suffix isn't a non-negative integer. Identifier-shape
+ * has been `<prefix>-<n>` since launch; this is intentionally tolerant of
+ * multi-segment prefixes (`"FOO-BAR-7"` returns `7`).
+ */
+function parseIssueNumberFromIdentifier(identifier: string): number | null {
+  const lastDash = identifier.lastIndexOf("-");
+  if (lastDash < 0 || lastDash === identifier.length - 1) return null;
+  const tail = identifier.slice(lastDash + 1);
+  if (!/^\d+$/.test(tail)) return null;
+  const parsed = Number(tail);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
 function classifyPortableFileKind(pathValue: string): CompanyPortabilityExportPreviewResult["fileInventory"][number]["kind"] {
   const normalized = normalizePortablePath(pathValue);
   if (normalized === "COMPANY.md") return "company";
@@ -562,6 +577,36 @@ type ImportMode = "board_full" | "agent_safe";
 type ImportBehaviorOptions = {
   mode?: ImportMode;
   sourceCompanyId?: string | null;
+  /**
+   * When true, the importer preserves source UUIDs (and the company's
+   * issuePrefix + issueCounter) instead of minting new ones. Only honored
+   * with `target.mode: "new_company"` — merging a source bundle into an
+   * existing destination company would create id collisions. Forces
+   * `collisionStrategy` semantics to "skip on id collision". Designed for
+   * the database setup wizard's local→remote migration, where preserving
+   * external link stability (ACM-42 issue identifiers, bookmarked URLs)
+   * matters. Bundles from older Paperclip versions don't carry source ids;
+   * the importer falls back to mint-new for those even when preserveIds is
+   * set, and emits a warning.
+   *
+   * Coverage (today):
+   *   - ✓ companies (uuid, issuePrefix, issueCounter)
+   *   - ✓ agents (uuid)
+   *   - ✓ projects (uuid)
+   *   - ✓ issues (uuid + identifier verbatim)
+   *   - ✗ goals — minted fresh; no manifest id field
+   *   - ✗ routines — minted fresh; no manifest id field
+   *   - ✗ skills — minted fresh
+   *   - ✗ project_workspaces — minted fresh
+   *   - ✗ issue_comments — minted fresh
+   *
+   * External links to the ✓ entities survive a preserveIds migration. Links
+   * to the ✗ entities break. Extending coverage requires adding optional
+   * `id` to the corresponding manifest schemas + reader/writer round-trip,
+   * then branching the import path on `preserveIds && manifestEntry.id` (see
+   * the company/agent/project/issue paths in importBundle for the pattern).
+   */
+  preserveIds?: boolean;
 };
 
 type AgentLike = {
@@ -2506,7 +2551,11 @@ function buildManifestFromPackageFiles(
   const skillPaths = Array.from(new Set([...referencedSkillPaths, ...discoveredSkillPaths])).sort();
 
   const manifest: CompanyPortabilityManifest = {
-    schemaVersion: 5,
+    // v6: adds optional source identity fields (company.id, company.issuePrefix,
+    // company.issueCounter, agent.id, project.id, issue.id) to support
+    // preserveIds imports from the database setup wizard. Bundles from older
+    // Paperclip versions parse fine — the new fields are all `.optional()`.
+    schemaVersion: 6,
     generatedAt: new Date().toISOString(),
     source: opts?.sourceLabel ?? null,
     includes: {
@@ -2522,6 +2571,15 @@ function buildManifestFromPackageFiles(
       description: asString(companyFrontmatter.description),
       brandColor: asString(paperclipCompany.brandColor),
       logoPath: asString(paperclipCompany.logoPath) ?? asString(paperclipCompany.logo),
+      // Optional source identity — only present when the bundle was exported by
+      // a Paperclip version that emits these fields. Validator marks them
+      // optional (not nullable), so coerce null → undefined.
+      id: asString(paperclipCompany.id) ?? undefined,
+      issuePrefix: asString(paperclipCompany.issuePrefix) ?? undefined,
+      issueCounter:
+        typeof paperclipCompany.issueCounter === "number" && Number.isFinite(paperclipCompany.issueCounter)
+          ? Math.max(0, Math.floor(paperclipCompany.issueCounter))
+          : undefined,
       attachmentMaxBytes:
         typeof paperclipCompany.attachmentMaxBytes === "number" && Number.isFinite(paperclipCompany.attachmentMaxBytes)
           ? Math.max(1, Math.floor(paperclipCompany.attachmentMaxBytes))
@@ -2595,6 +2653,8 @@ function buildManifestFromPackageFiles(
           ? Math.max(0, Math.floor(extension.budgetMonthlyCents))
           : 0,
       metadata: extensionMetadata,
+      // Optional source uuid — see comment on companyManifest.id.
+      id: asString(extension.id) ?? undefined,
     });
 
     manifest.envInputs.push(...readAgentEnvInputs(extension, slug));
@@ -2725,6 +2785,8 @@ function buildManifestFromPackageFiles(
         : null,
       workspaces,
       metadata: isPlainRecord(extension.metadata) ? extension.metadata : null,
+      // Optional source uuid — see comment on companyManifest.id.
+      id: asString(extension.id) ?? undefined,
     });
     manifest.envInputs.push(...readProjectEnvInputs(extension, slug));
     if (frontmatter.kind && frontmatter.kind !== "project") {
@@ -2781,6 +2843,8 @@ function buildManifestFromPackageFiles(
         : null,
       comments: readPortableIssueComments(extension.comments, warnings, `Task ${slug}`),
       metadata: isPlainRecord(extension.metadata) ? extension.metadata : null,
+      // Optional source uuid — see comment on companyManifest.id.
+      id: asString(extension.id) ?? undefined,
     });
     if (frontmatter.kind && frontmatter.kind !== "task") {
       warnings.push(`Task markdown ${taskPath} does not declare kind: task in frontmatter.`);
@@ -3394,6 +3458,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         }
 
         const extension = stripEmptyValues({
+          // Optional source uuid. Honored on import only when
+          // options.preserveIds is true; ignored otherwise.
+          id: agent.id,
           role: agent.role !== "agent" ? agent.role : undefined,
           icon: agent.icon ?? null,
           capabilities: agent.capabilities ?? null,
@@ -3437,6 +3504,8 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         project.description ?? "",
       );
       const extension = stripEmptyValues({
+        // Optional source uuid — honored on import only when preserveIds is true.
+        id: project.id,
         leadAgentSlug: project.leadAgentId ? (idToSlug.get(project.leadAgentId) ?? null) : null,
         targetDate: project.targetDate ?? null,
         color: project.color ?? null,
@@ -3488,6 +3557,8 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         issue.description ?? "",
       );
       const extension = stripEmptyValues({
+        // Optional source uuid — honored on import only when preserveIds is true.
+        id: issue.id,
         identifier: issue.identifier,
         status: issue.status,
         priority: issue.priority,
@@ -3572,6 +3643,11 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
       {
         schema: "paperclip/v1",
         company: stripEmptyValues({
+          // Source identity fields. Optional — readers that don't honor
+          // `preserveIds` ignore them. See ImportBehaviorOptions.preserveIds.
+          id: company.id,
+          issuePrefix: company.issuePrefix,
+          issueCounter: company.issueCounter,
           brandColor: company.brandColor ?? null,
           logoPath: companyLogoPath,
           attachmentMaxBytes: company.attachmentMaxBytes,
@@ -4087,12 +4163,15 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           throw unprocessable("Safe new-company import requires at least one active user membership on the source company.");
         }
       }
+      if (options?.preserveIds && mode === "agent_safe") {
+        throw unprocessable("preserveIds is not supported in agent_safe mode.");
+      }
       const companyName =
         asString(input.target.newCompanyName) ??
         sourceManifest.company?.name ??
         sourceManifest.source?.companyName ??
         "Imported Company";
-      const created = await companies.create({
+      const baseCompanyFields = {
         name: companyName,
         description: include.company ? (sourceManifest.company?.description ?? null) : null,
         brandColor: include.company ? (sourceManifest.company?.brandColor ?? null) : null,
@@ -4114,7 +4193,43 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         feedbackDataSharingTermsVersion: include.company
           ? (sourceManifest.company?.feedbackDataSharingTermsVersion ?? null)
           : null,
-      });
+      };
+
+      const sourceCompanyId = options?.preserveIds ? sourceManifest.company?.id : undefined;
+      const sourceIssuePrefix = options?.preserveIds ? sourceManifest.company?.issuePrefix : undefined;
+      const sourceIssueCounter = options?.preserveIds ? sourceManifest.company?.issueCounter : undefined;
+
+      let created: Awaited<ReturnType<typeof companies.create>> | null = null;
+
+      if (options?.preserveIds && sourceCompanyId && sourceIssuePrefix !== undefined) {
+        // preserveIds path: insert with source id + prefix + counter. If the
+        // destination already has a row with this id, the insert is skipped
+        // and we surface a warning rather than silently re-minting — the
+        // caller asked for fidelity and got conflict instead.
+        created = await companies.insertIfMissing({
+          ...baseCompanyFields,
+          id: sourceCompanyId,
+          issuePrefix: sourceIssuePrefix,
+          issueCounter: sourceIssueCounter ?? 0,
+        });
+        if (!created) {
+          warnings.push(
+            `preserveIds: company ${sourceCompanyId} already exists at the destination; skipped.`,
+          );
+          // Fall back to fetching the existing row so the rest of the import
+          // (agents, projects, issues) can attach to it.
+          created = await companies.getById(sourceCompanyId);
+          if (!created) throw notFound("Company id collided but row not retrievable");
+        }
+      } else {
+        if (options?.preserveIds) {
+          warnings.push(
+            "preserveIds was requested but the bundle has no source company id; falling back to mint-new.",
+          );
+        }
+        created = await companies.create(baseCompanyFields);
+      }
+
       if (mode === "agent_safe" && options?.sourceCompanyId) {
         await access.copyActiveUserMemberships(options.sourceCompanyId, created.id);
       } else {
@@ -4123,6 +4238,9 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
       targetCompany = created;
       companyAction = "created";
     } else {
+      if (options?.preserveIds) {
+        throw unprocessable("preserveIds is only supported with target.mode = new_company.");
+      }
       targetCompany = await companies.getById(input.target.companyId);
       if (!targetCompany) throw notFound("Target company not found");
       if (include.company && sourceManifest.company && mode === "board_full") {
@@ -4336,10 +4454,30 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
         }
 
         const createdStatus = "idle";
-        let created = await agents.create(targetCompany.id, {
-          ...patch,
-          status: createdStatus,
-        });
+        const preserveAgentId = options?.preserveIds && manifestAgent.id;
+        let created = preserveAgentId
+          ? await agents.insertIfMissing({
+              ...patch,
+              id: manifestAgent.id!,
+              companyId: targetCompany.id,
+              status: createdStatus,
+            })
+          : await agents.create(targetCompany.id, {
+              ...patch,
+              status: createdStatus,
+            });
+
+        if (preserveAgentId && created === null) {
+          // Source agent id already exists at destination — surface it as a
+          // warning, then fall back to the existing row so subsequent steps
+          // (membership, instructions bundle materialisation) can proceed.
+          warnings.push(
+            `preserveIds: agent ${manifestAgent.id} already exists at the destination; skipped.`,
+          );
+          created = await agents.getById(manifestAgent.id!);
+          if (!created) throw notFound("Agent id collided but row not retrievable");
+        }
+        if (!created) throw notFound("Agent insert returned null unexpectedly");
         await access.ensureMembership(targetCompany.id, "agent", created.id, "member", "active");
         await access.setPrincipalPermission(
           targetCompany.id,
@@ -4445,7 +4583,24 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
             reason: planProject.reason,
           });
         } else {
-          const created = await projects.create(targetCompany.id, projectPatch);
+          const preserveProjectId = options?.preserveIds && manifestProject.id;
+          let created = preserveProjectId
+            ? await projects.insertIfMissing({
+                ...projectPatch,
+                id: manifestProject.id!,
+                companyId: targetCompany.id,
+              })
+            : await projects.create(targetCompany.id, projectPatch);
+
+          if (preserveProjectId && created === null) {
+            warnings.push(
+              `preserveIds: project ${manifestProject.id} already exists at the destination; skipped.`,
+            );
+            created = await projects.getById(manifestProject.id!);
+            if (!created) throw notFound("Project id collided but row not retrievable");
+          }
+          if (!created) throw notFound("Project insert returned null unexpectedly");
+
           projectId = created.id;
           importedSlugToProjectId.set(planProject.slug, created.id);
           existingProjectSlugToId.set(created.urlKey, created.id);
@@ -4609,21 +4764,77 @@ export function companyPortabilityService(db: Db, storage?: StorageService) {
           warnings.push(`Task ${manifestIssue.slug} was downgraded to todo because its assignee could not be imported as assignable work.`);
           issueStatus = "todo";
         }
-        const createdIssue = await issues.create(targetCompany.id, {
-          projectId,
-          projectWorkspaceId,
-          title: manifestIssue.title,
-          description,
-          assigneeAgentId,
-          status: issueStatus,
-          priority: manifestIssue.priority && ISSUE_PRIORITIES.includes(manifestIssue.priority as any)
-            ? manifestIssue.priority as typeof ISSUE_PRIORITIES[number]
-            : "medium",
-          billingCode: manifestIssue.billingCode,
-          assigneeAdapterOverrides: manifestIssue.assigneeAdapterOverrides,
-          executionWorkspaceSettings: manifestIssue.executionWorkspaceSettings,
-          labelIds: manifestIssue.labelIds ?? [],
-        });
+        const preserveIssueId =
+          options?.preserveIds && manifestIssue.id && manifestIssue.identifier;
+        const sourceIssueNumber = preserveIssueId
+          ? parseIssueNumberFromIdentifier(manifestIssue.identifier!)
+          : null;
+        if (preserveIssueId && sourceIssueNumber === null) {
+          warnings.push(
+            `preserveIds: issue ${manifestIssue.identifier} has no parseable number — falling back to mint-new.`,
+          );
+        }
+
+        const issuePriority =
+          manifestIssue.priority && ISSUE_PRIORITIES.includes(manifestIssue.priority as any)
+            ? (manifestIssue.priority as typeof ISSUE_PRIORITIES[number])
+            : "medium";
+
+        let createdIssue: Awaited<ReturnType<typeof issues.create>>;
+        if (preserveIssueId && sourceIssueNumber !== null) {
+          // preserveIds path: bypass the counter dance, insert verbatim. Labels
+          // still need to flow through after the insert because they live in a
+          // join table — see `syncIssueLabels` call below.
+          const inserted = await issues.insertIfMissing({
+            id: manifestIssue.id!,
+            companyId: targetCompany.id,
+            projectId,
+            projectWorkspaceId,
+            issueNumber: sourceIssueNumber,
+            identifier: manifestIssue.identifier!,
+            title: manifestIssue.title,
+            description,
+            assigneeAgentId,
+            status: issueStatus,
+            priority: issuePriority,
+            billingCode: manifestIssue.billingCode,
+            assigneeAdapterOverrides:
+              manifestIssue.assigneeAdapterOverrides as Record<string, unknown> | null,
+            executionWorkspaceSettings:
+              manifestIssue.executionWorkspaceSettings as Record<string, unknown> | null,
+            // Source createdAt/updatedAt/originKind/requestDepth aren't on the
+            // manifest today; DB defaults are acceptable for the migration use
+            // case. Extend the manifest if full fidelity becomes required.
+          });
+          if (inserted === null) {
+            warnings.push(
+              `preserveIds: issue ${manifestIssue.identifier} already exists at the destination; skipped.`,
+            );
+            const existing = await issues.getByIdentifier(manifestIssue.identifier!);
+            if (!existing) throw notFound("Issue id collided but row not retrievable");
+            createdIssue = existing as Awaited<ReturnType<typeof issues.create>>;
+          } else {
+            createdIssue = inserted as Awaited<ReturnType<typeof issues.create>>;
+            // Labels join table is separate from the issue row — sync now.
+            if ((manifestIssue.labelIds ?? []).length > 0) {
+              await issues.update(inserted.id, { labelIds: manifestIssue.labelIds ?? [] });
+            }
+          }
+        } else {
+          createdIssue = await issues.create(targetCompany.id, {
+            projectId,
+            projectWorkspaceId,
+            title: manifestIssue.title,
+            description,
+            assigneeAgentId,
+            status: issueStatus,
+            priority: issuePriority,
+            billingCode: manifestIssue.billingCode,
+            assigneeAdapterOverrides: manifestIssue.assigneeAdapterOverrides,
+            executionWorkspaceSettings: manifestIssue.executionWorkspaceSettings,
+            labelIds: manifestIssue.labelIds ?? [],
+          });
+        }
         for (const comment of manifestIssue.comments ?? []) {
           const authorAgentId = comment.authorType === "agent" && comment.authorAgentSlug
             ? importedSlugToAgentId.get(comment.authorAgentSlug)

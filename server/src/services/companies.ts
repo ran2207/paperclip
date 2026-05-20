@@ -183,6 +183,30 @@ export function companyService(db: Db) {
       return enrichCompany(hydrated);
     },
 
+    /**
+     * Insert a company row verbatim, preserving the source id, issuePrefix and
+     * issueCounter. Skips silently if a row with this id already exists.
+     * Returns the enriched company when inserted, or null when the destination
+     * already had a row with this id. Used by:
+     *   - the database setup wizard (per-entity local-export path)
+     *   - companyPortabilityService.importBundle when `preserveIds: true`
+     */
+    insertIfMissing: async (data: typeof companies.$inferInsert) => {
+      const inserted = await db
+        .insert(companies)
+        .values(data)
+        .onConflictDoNothing({ target: companies.id })
+        .returning({ id: companies.id });
+      if (inserted.length === 0) return null;
+      await environmentsSvc.ensureLocalEnvironment(inserted[0].id);
+      const row = await getCompanyQuery(db)
+        .where(eq(companies.id, inserted[0].id))
+        .then((rows) => rows[0] ?? null);
+      if (!row) return null;
+      const [hydrated] = await hydrateCompanySpend([row], db);
+      return enrichCompany(hydrated);
+    },
+
     update: (
       id: string,
       data: Partial<typeof companies.$inferInsert> & { logoAssetId?: string | null },

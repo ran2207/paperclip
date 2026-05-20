@@ -433,6 +433,38 @@ export function agentService(db: Db) {
       return normalizeAgentRow(created);
     },
 
+    /**
+     * Insert an agent row verbatim, preserving the source id, name, and
+     * runtimeConfig. Skips silently if a row with this id already exists.
+     * Returns the normalized agent when inserted, or null on id collision.
+     * Used by companyPortabilityService.importBundle when `preserveIds: true`
+     * so external references to source agent uuids (JWT subjects, activity
+     * log entries) survive cross-database migration.
+     *
+     * Differences from `create`:
+     *   - id and companyId are caller-supplied (not minted/derived)
+     *   - skips deduplicateAgentName — preserveIds implies the source name
+     *     should be honored verbatim
+     *   - skips normalizeRuntimeConfigForNewAgent — the source row already
+     *     went through it once; re-normalizing risks dropping fields added
+     *     by later schema versions
+     *   - still calls normalizeAgentPermissions in case permissions evolved
+     */
+    insertIfMissing: async (data: typeof agents.$inferInsert) => {
+      if (data.reportsTo) {
+        await ensureManager(data.companyId, data.reportsTo);
+      }
+      const role = data.role ?? "general";
+      const normalizedPermissions = normalizeAgentPermissions(data.permissions, role);
+      const inserted = await db
+        .insert(agents)
+        .values({ ...data, role, permissions: normalizedPermissions })
+        .onConflictDoNothing({ target: agents.id })
+        .returning({ id: agents.id });
+      if (inserted.length === 0) return null;
+      return getById(inserted[0].id);
+    },
+
     update: updateAgent,
 
     pause: async (id: string, reason: "manual" | "budget" | "system" = "manual") => {

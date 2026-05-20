@@ -49,6 +49,12 @@ export const portabilityCompanyManifestEntrySchema = z.object({
   feedbackDataSharingConsentAt: z.string().datetime().nullable().default(null),
   feedbackDataSharingConsentByUserId: z.string().nullable().default(null),
   feedbackDataSharingTermsVersion: z.string().nullable().default(null),
+  // Optional source identity. Populated by exportBundle when the source row is
+  // available; consumed by importBundle when `preserveIds: true`. Absent from
+  // bundles produced by older Paperclip versions — treat missing as "mint new".
+  id: z.string().uuid().optional(),
+  issuePrefix: z.string().min(1).optional(),
+  issueCounter: z.number().int().nonnegative().optional(),
 });
 
 export const portabilitySidebarOrderSchema = z.object({
@@ -72,6 +78,9 @@ export const portabilityAgentManifestEntrySchema = z.object({
   permissions: z.record(z.unknown()),
   budgetMonthlyCents: z.number().int().nonnegative(),
   metadata: z.record(z.unknown()).nullable(),
+  // Optional source agent uuid — preserved when bundle is imported with
+  // `preserveIds: true`. Slug remains the primary cross-entity reference.
+  id: z.string().uuid().optional(),
 });
 
 export const portabilitySkillManifestEntrySchema = z.object({
@@ -117,6 +126,8 @@ export const portabilityProjectManifestEntrySchema = z.object({
     isPrimary: z.boolean(),
   })).default([]),
   metadata: z.record(z.unknown()).nullable(),
+  // Optional source project uuid — see comment on agent.id.
+  id: z.string().uuid().optional(),
 });
 
 export const portabilityIssueRoutineTriggerManifestEntrySchema = z.object({
@@ -166,6 +177,8 @@ export const portabilityIssueManifestEntrySchema = z.object({
   assigneeAdapterOverrides: z.record(z.unknown()).nullable(),
   comments: z.array(portabilityIssueCommentManifestEntrySchema).default([]),
   metadata: z.record(z.unknown()).nullable(),
+  // Optional source issue uuid — see comment on agent.id.
+  id: z.string().uuid().optional(),
 });
 
 export const portabilityManifestSchema = z.object({
@@ -256,6 +269,10 @@ export const portabilityAdapterOverrideSchema = z.object({
 
 export const companyPortabilityImportSchema = companyPortabilityPreviewSchema.extend({
   adapterOverrides: z.record(z.string().min(1), portabilityAdapterOverrideSchema).optional(),
+  // Preserve source uuids and issue identifiers across the import. See
+  // ImportBehaviorOptions.preserveIds in company-portability.ts for semantics
+  // and constraints (new_company target only, board_full mode only).
+  preserveIds: z.boolean().optional(),
 });
 
 export type CompanyPortabilityImport = z.infer<typeof companyPortabilityImportSchema>;

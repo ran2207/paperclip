@@ -143,6 +143,8 @@ The database mode is controlled by `DATABASE_URL`:
 
 Your Drizzle schema (`packages/db/src/schema/`) stays the same regardless of mode.
 
+When you switch from embedded to external Postgres and want to bring your existing companies, agents, and issues with you — and keep bookmarked `/ACM-42` URLs resolving — use the in-app database setup wizard. It handles schema migrations + data import + URL-stable UUID preservation. See [doc/DATABASE-SETUP-WIZARD.md](DATABASE-SETUP-WIZARD.md) for the full flow and architecture.
+
 ## Plugin database namespaces
 
 The plugin runtime tracks plugin-owned database namespaces and migrations in `plugin_database_namespaces` and `plugin_migrations`. Hosted deployments that separate runtime and migration connections should set `DATABASE_MIGRATION_URL`; plugin namespace migration work uses the migration connection when present.

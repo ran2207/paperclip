@@ -3231,6 +3231,47 @@ export function issueService(db: Db) {
       });
     },
 
+    /**
+     * Insert an issue row verbatim, preserving the source id, identifier, and
+     * issueNumber. Skips silently if a row with this id already exists; throws
+     * on identifier collision (different uuid, same `<prefix>-<n>`) — that's a
+     * destination corruption signal, not an idempotent retry.
+     *
+     * Used by companyPortabilityService.importBundle when `preserveIds: true`
+     * so that bookmarked `ACM-42` URLs keep resolving after a database switch.
+     *
+     * Deliberately does NOT:
+     *   - update companies.issueCounter — the counter is self-correcting
+     *     (`greatest(counter, max(issueNumber)) + 1` in the create path),
+     *     so future creates will skip past every imported number for free.
+     *   - assert valid project/execution workspaces — source already validated.
+     *   - sync labels/blockers/comments — those live in other tables and are
+     *     copied in their own passes after every issue is inserted (forward
+     *     references between issues only resolve once all rows are present).
+     *   - apply status side-effects (startedAt/completedAt/cancelledAt) — those
+     *     are already on the source row.
+     *   - run buildInitialIssueMonitorFields — same reason.
+     *
+     * Caller responsibility: pass the full `issues.$inferInsert` payload that
+     * the source row carried. Columns not provided fall back to DB defaults,
+     * which is acceptable for monitor fields but lossy for createdAt/updatedAt
+     * unless caller supplies them.
+     */
+    insertIfMissing: async (data: typeof issues.$inferInsert) => {
+      const values = {
+        ...data,
+        requestDepth: clampIssueRequestDepth(data.requestDepth),
+        originKind: data.originKind ?? "manual",
+      };
+      const inserted = await db
+        .insert(issues)
+        .values(values)
+        .onConflictDoNothing({ target: issues.id })
+        .returning({ id: issues.id });
+      if (inserted.length === 0) return null;
+      return getIssueByUuid(inserted[0].id);
+    },
+
     update: async (
       id: string,
       data: Partial<typeof issues.$inferInsert> & {

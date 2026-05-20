@@ -607,6 +607,12 @@ export async function startServer(): Promise<StartedServer> {
         return result;
       },
     },
+    databaseConfig: {
+      databaseMode: config.databaseMode,
+      databaseUrl: activeDatabaseConnectionString,
+      embeddedPostgresDataDir: config.embeddedPostgresDataDir,
+      embeddedPostgresPort: config.embeddedPostgresPort,
+    },
     deploymentMode: config.deploymentMode,
     deploymentExposure: config.deploymentExposure,
     allowedHostnames: config.allowedHostnames,

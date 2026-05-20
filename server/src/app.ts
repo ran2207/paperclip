@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { Db } from "@paperclipai/db";
+import { openEmbeddedPostgresIfPresent } from "@paperclipai/db";
 import type { DeploymentExposure, DeploymentMode } from "@paperclipai/shared";
 import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
@@ -34,6 +35,7 @@ import {
   instanceDatabaseBackupRoutes,
   type InstanceDatabaseBackupService,
 } from "./routes/instance-database-backups.js";
+import { instanceDatabaseRoutes } from "./routes/instance-database.js";
 import { llmRoutes } from "./routes/llms.js";
 import { authRoutes } from "./routes/auth.js";
 import { assetRoutes } from "./routes/assets.js";
@@ -120,6 +122,18 @@ export async function createApp(
       }): Promise<unknown>;
     };
     databaseBackupService?: InstanceDatabaseBackupService;
+    /**
+     * Database wiring exposed to the instance-database wizard route. The route
+     * needs both the current connection (for status/migrate) and a way to
+     * reach the local embedded instance (for source-side reads when migrating
+     * data into a remote destination).
+     */
+    databaseConfig: {
+      databaseMode: "embedded-postgres" | "postgres";
+      databaseUrl: string | undefined;
+      embeddedPostgresDataDir: string;
+      embeddedPostgresPort: number;
+    };
     deploymentMode: DeploymentMode;
     deploymentExposure: DeploymentExposure;
     allowedHostnames: string[];
@@ -214,6 +228,28 @@ export async function createApp(
   if (opts.databaseBackupService) {
     api.use(instanceDatabaseBackupRoutes(opts.databaseBackupService));
   }
+  api.use(
+    instanceDatabaseRoutes({
+      db,
+      config: {
+        databaseMode: opts.databaseConfig.databaseMode,
+        databaseUrl: opts.databaseConfig.databaseUrl,
+      },
+      storage: opts.storageService,
+      // When the running server already uses the local embedded data dir,
+      // there's nothing to migrate FROM — return null so the wizard renders
+      // "no local instance found" cleanly. Otherwise, spawn (or adopt) an
+      // embedded process against the local data dir so we can read it as a
+      // source. release() is wired to shut down any process this call spawned.
+      openLocalEmbeddedConnection: async () => {
+        if (opts.databaseConfig.databaseMode === "embedded-postgres") return null;
+        return openEmbeddedPostgresIfPresent(
+          opts.databaseConfig.embeddedPostgresDataDir,
+          opts.databaseConfig.embeddedPostgresPort,
+        );
+      },
+    }),
+  );
   const pluginRegistry = pluginRegistryService(db);
   const eventBus = createPluginEventBus();
   setPluginEventBus(eventBus);

@@ -495,6 +495,45 @@ export function projectService(db: Db) {
     return enriched!;
   };
 
+  /**
+   * Insert a project row verbatim, preserving the source id and color. Skips
+   * silently if a row with this id already exists. Returns the enriched project
+   * (goals + workspaces attached) when inserted, or null on id collision.
+   *
+   * Used by companyPortabilityService.importBundle when `preserveIds: true` so
+   * project uuids — referenced by issues.projectId on imported issues — stay
+   * stable across a database migration.
+   *
+   * Deliberately does NOT:
+   *   - auto-assign a color from PROJECT_COLORS (source row already has one)
+   *   - dedupe the name via resolveProjectNameForUniqueShortname (preserveIds
+   *     implies fidelity; name uniqueness within a company is enforced by app
+   *     logic, not the schema)
+   *
+   * Goals are linked through the join table after insert via syncGoalLinks,
+   * matching the create path. Workspaces (project_workspaces) live in a
+   * separate table and are not handled here — caller's responsibility.
+   */
+  const insertProjectIfMissing = async (
+    data: typeof projects.$inferInsert & { goalIds?: string[] },
+  ): Promise<ProjectWithGoals | null> => {
+    const { goalIds: inputGoalIds, ...projectData } = data;
+    const ids = resolveGoalIds({ goalIds: inputGoalIds, goalId: projectData.goalId });
+    const legacyGoalId = ids && ids.length > 0 ? ids[0] : projectData.goalId ?? null;
+
+    const inserted = await db
+      .insert(projects)
+      .values({ ...projectData, goalId: legacyGoalId })
+      .onConflictDoNothing({ target: projects.id })
+      .returning({ id: projects.id });
+    if (inserted.length === 0) return null;
+
+    if (ids && ids.length > 0) {
+      await syncGoalLinks(db, inserted[0].id, projectData.companyId, ids);
+    }
+    return getProjectById(inserted[0].id);
+  };
+
   const getProjectById = async (id: string): Promise<ProjectWithGoals | null> => {
     const row = await db
       .select()
@@ -691,6 +730,8 @@ export function projectService(db: Db) {
     },
 
     create: createProject,
+
+    insertIfMissing: insertProjectIfMissing,
 
     update: async (
       id: string,

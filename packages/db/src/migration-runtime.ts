@@ -87,7 +87,23 @@ async function loadEmbeddedPostgresCtor(): Promise<EmbeddedPostgresCtor> {
   }
 }
 
-async function ensureEmbeddedPostgresConnection(
+/**
+ * Boot or adopt an embedded Postgres process for `dataDir` and return a
+ * short-lived `{ connectionString, source, stop }` handle. Used by the
+ * migration CLI and by tooling that needs a side-connection to a local
+ * embedded cluster while the main server uses an external `DATABASE_URL`
+ * (e.g. the database setup wizard reading a source DB during migration).
+ *
+ * Behavior:
+ *  - If a postmaster.pid points at a live process → adopt; stop() is a no-op.
+ *  - If the cluster reachable at `preferredPort` matches `dataDir` → adopt.
+ *  - Otherwise → spawn a fresh embedded process; stop() shuts it down.
+ *
+ * Throws if `embedded-postgres` cannot be imported or the cluster fails to
+ * start. Caller is responsible for checking that `dataDir` actually contains
+ * an initialized cluster (see `openEmbeddedPostgresIfPresent`).
+ */
+export async function ensureEmbeddedPostgresConnection(
   dataDir: string,
   preferredPort: number,
 ): Promise<MigrationConnection> {

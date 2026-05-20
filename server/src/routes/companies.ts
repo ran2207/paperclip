@@ -180,7 +180,11 @@ export function companyRoutes(db: Db, storage?: StorageService) {
     assertBoard(req);
     assertImportTargetAccess(req, req.body.target);
     const actor = getActorInfo(req);
-    const result = await portability.importBundle(req.body, req.actor.type === "board" ? req.actor.userId : null);
+    const result = await portability.importBundle(
+      req.body,
+      req.actor.type === "board" ? req.actor.userId : null,
+      { preserveIds: req.body.preserveIds === true },
+    );
     await logActivity(db, {
       companyId: result.company.id,
       actorType: actor.actorType,

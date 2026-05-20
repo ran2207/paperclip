@@ -7,10 +7,12 @@ import {
   MONTHLY_RETENTION_PRESETS,
   DEFAULT_BACKUP_RETENTION,
 } from "@paperclipai/shared";
-import { LogOut, SlidersHorizontal } from "lucide-react";
+import { Database, LogOut, SlidersHorizontal } from "lucide-react";
 import { authApi } from "@/api/auth";
 import { healthApi } from "@/api/health";
+import { instanceDatabaseApi } from "@/api/instanceDatabase";
 import { instanceSettingsApi } from "@/api/instanceSettings";
+import { useDialogActions } from "../context/DialogContext";
 import { ModeBadge } from "@/components/access/ModeBadge";
 import { Button } from "../components/ui/button";
 import { useBreadcrumbs } from "../context/BreadcrumbContext";
@@ -51,6 +53,12 @@ export function InstanceGeneralSettings() {
     queryFn: () => healthApi.get(),
     retry: false,
   });
+  const databaseStatusQuery = useQuery({
+    queryKey: ["instance", "database", "status"] as const,
+    queryFn: () => instanceDatabaseApi.getStatus(),
+    retry: false,
+  });
+  const { openDatabaseSetup } = useDialogActions();
 
   const updateGeneralMutation = useMutation({
     mutationFn: instanceSettingsApi.updateGeneral,
@@ -131,6 +139,56 @@ export function InstanceGeneralSettings() {
               value={healthQuery.data?.bootstrapInviteActive ? "Active" : "None"}
             />
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-xl border border-border bg-card p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-2 min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Database</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Switch between the bundled embedded Postgres and an external connection.
+              Running the wizard against a new destination will offer to migrate data
+              from your local instance while preserving issue identifiers.
+            </p>
+            {databaseStatusQuery.data && (
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-xs text-muted-foreground">Current:</span>
+                <span className="text-xs font-mono">
+                  {databaseStatusQuery.data.mode === "embedded-postgres"
+                    ? "embedded"
+                    : `${databaseStatusQuery.data.host ?? "remote"}${
+                        databaseStatusQuery.data.database
+                          ? ` / ${databaseStatusQuery.data.database}`
+                          : ""
+                      }`}
+                </span>
+                {!databaseStatusQuery.data.reachable ? (
+                  <span className="text-[11px] rounded-full border border-destructive/40 bg-destructive/10 text-destructive px-2 py-0.5">
+                    unreachable
+                  </span>
+                ) : !databaseStatusQuery.data.schemaPresent ? (
+                  <span className="text-[11px] rounded-full border border-amber-300/60 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/40 text-amber-700 dark:text-amber-300 px-2 py-0.5">
+                    schema not initialized
+                  </span>
+                ) : databaseStatusQuery.data.pendingMigrations.length > 0 ? (
+                  <span className="text-[11px] rounded-full border border-amber-300/60 bg-amber-50 dark:bg-amber-500/10 dark:border-amber-500/40 text-amber-700 dark:text-amber-300 px-2 py-0.5">
+                    {databaseStatusQuery.data.pendingMigrations.length} pending migrations
+                  </span>
+                ) : (
+                  <span className="text-[11px] rounded-full border border-green-300 dark:border-green-500/40 bg-green-50 dark:bg-green-500/10 text-green-700 dark:text-green-300 px-2 py-0.5">
+                    ready
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          <Button variant="outline" size="sm" onClick={() => openDatabaseSetup()}>
+            Change database
+          </Button>
         </div>
       </section>
 

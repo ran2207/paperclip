@@ -48,6 +48,9 @@ interface DialogContextValue {
   onboardingOptions: OnboardingOptions;
   openOnboarding: (options?: OnboardingOptions) => void;
   closeOnboarding: () => void;
+  databaseSetupOpen: boolean;
+  openDatabaseSetup: () => void;
+  closeDatabaseSetup: () => void;
 }
 
 type DialogStateValue = Pick<
@@ -60,6 +63,7 @@ type DialogStateValue = Pick<
   | "newAgentOpen"
   | "onboardingOpen"
   | "onboardingOptions"
+  | "databaseSetupOpen"
 >;
 
 type DialogActionsValue = Omit<DialogContextValue, keyof DialogStateValue>;
@@ -76,6 +80,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const [onboardingOptions, setOnboardingOptions] = useState<OnboardingOptions>({});
+  const [databaseSetupOpen, setDatabaseSetupOpen] = useState(false);
 
   const openNewIssue = useCallback((defaults: NewIssueDefaults = {}) => {
     setNewIssueDefaults(defaults);
@@ -123,6 +128,14 @@ export function DialogProvider({ children }: { children: ReactNode }) {
     setOnboardingOptions({});
   }, []);
 
+  const openDatabaseSetup = useCallback(() => {
+    setDatabaseSetupOpen(true);
+  }, []);
+
+  const closeDatabaseSetup = useCallback(() => {
+    setDatabaseSetupOpen(false);
+  }, []);
+
   const stateValue = useMemo<DialogStateValue>(
     () => ({
       newIssueOpen,
@@ -133,6 +146,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       newAgentOpen,
       onboardingOpen,
       onboardingOptions,
+      databaseSetupOpen,
     }),
     [
       newIssueOpen,
@@ -143,6 +157,7 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       newAgentOpen,
       onboardingOpen,
       onboardingOptions,
+      databaseSetupOpen,
     ],
   );
 
@@ -158,6 +173,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       closeNewAgent,
       openOnboarding,
       closeOnboarding,
+      openDatabaseSetup,
+      closeDatabaseSetup,
     }),
     [
       openNewIssue,
@@ -170,6 +187,8 @@ export function DialogProvider({ children }: { children: ReactNode }) {
       closeNewAgent,
       openOnboarding,
       closeOnboarding,
+      openDatabaseSetup,
+      closeDatabaseSetup,
     ],
   );
 

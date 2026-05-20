@@ -20,6 +20,12 @@ Before making changes, read in this order:
 `doc/SPEC.md` is long-horizon product context.
 `doc/SPEC-implementation.md` is the concrete V1 build contract.
 
+### Area-specific references
+
+Read these when working in the indicated area:
+
+- `doc/DATABASE-SETUP-WIZARD.md` — when touching `server/src/routes/instance-database.ts`, `server/src/services/company-portability.ts`, `ui/src/components/DatabaseSetupWizard.tsx`, the preserveIds pipeline, or the `*.insertIfMissing` service methods on companies/agents/projects/issues. Covers the four-step wizard flow, the entity-id preservation contract (what is and isn't covered), the embedded-postgres side-spawn helper, and the recipe for extending preserveIds to a new entity type.
+
 ## 3. Repo Map
 
 - `server/`: Express REST API and orchestration services
