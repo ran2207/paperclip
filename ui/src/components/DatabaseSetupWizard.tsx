@@ -535,7 +535,10 @@ function ConnectionStep({
         />
       </div>
 
-      <ConnectionEditor onConnectionSwitched={onConnectionSwitched} />
+      <ConnectionEditor
+        currentMode={status.mode}
+        onConnectionSwitched={onConnectionSwitched}
+      />
     </div>
   );
 }
@@ -558,8 +561,10 @@ function looksLikePooler(connectionString: string): boolean {
 }
 
 function ConnectionEditor({
+  currentMode,
   onConnectionSwitched,
 }: {
+  currentMode: InstanceDatabaseStatus["mode"];
   onConnectionSwitched: (autoRestart: boolean) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -576,6 +581,16 @@ function ConnectionEditor({
     onError: (err) =>
       setError(err instanceof Error ? err.message : "Failed to save the connection."),
   });
+  const useEmbedded = useMutation({
+    mutationFn: () => instanceDatabaseApi.useEmbedded(),
+    onMutate: () => setError(null),
+    onSuccess: (result) => onConnectionSwitched(result.autoRestart),
+    onError: (err) =>
+      setError(
+        err instanceof Error ? err.message : "Failed to switch to the embedded database.",
+      ),
+  });
+  const isExternal = currentMode === "postgres";
 
   const trimmed = connectionString.trim();
   const looksValid = /^postgres(ql)?:\/\//.test(trimmed);
@@ -588,14 +603,41 @@ function ConnectionEditor({
 
   if (!expanded) {
     return (
-      <button
-        type="button"
-        onClick={() => setExpanded(true)}
-        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ChevronDown className="h-3 w-3 -rotate-90" />
-        Connect to a different database
-      </button>
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <ChevronDown className="h-3 w-3 -rotate-90" />
+          Connect to a different database
+        </button>
+
+        {isExternal && (
+          <button
+            type="button"
+            onClick={() => useEmbedded.mutate()}
+            disabled={useEmbedded.isPending}
+            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+          >
+            {useEmbedded.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Database className="h-3 w-3" />
+            )}
+            {useEmbedded.isPending
+              ? "Switching…"
+              : "Switch back to the bundled embedded Postgres"}
+          </button>
+        )}
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive">
+            <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+            <span>{error}</span>
+          </div>
+        )}
+      </div>
     );
   }
 

@@ -1,4 +1,4 @@
-import { Router, type Request } from "express";
+import { Router, type Request, type Response } from "express";
 import { existsSync, utimesSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,19 @@ function triggerDevServerRestart(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Shared tail for the connection-mutating endpoints. When under a dev watcher,
+ * schedules the restart for *after* the response has flushed — the watcher
+ * SIGTERMs this process within milliseconds of the entry-module touch, so the
+ * client must receive its response first.
+ */
+function scheduleAutoRestart(res: Response, autoRestart: boolean): void {
+  if (!autoRestart) return;
+  res.on("finish", () => {
+    setTimeout(() => triggerDevServerRestart(), 150);
+  });
 }
 
 /**
@@ -359,17 +372,53 @@ export function instanceDatabaseRoutes(deps: InstanceDatabaseDeps) {
         "Instance database connection string updated; restart required",
       );
 
-      // Restart only AFTER the response has fully flushed to the client —
-      // the watcher SIGTERMs this process within milliseconds of the touch.
-      if (autoRestart) {
-        res.on("finish", () => {
-          setTimeout(() => triggerDevServerRestart(), 150);
-        });
-      }
-
+      scheduleAutoRestart(res, autoRestart);
       res.json({ persisted: true, restartRequired: true, autoRestart });
     },
   );
+
+  router.post("/instance/database/use-embedded", async (req, res) => {
+    assertCanManageInstanceSettings(req);
+
+    if (process.env.DATABASE_URL) {
+      throw unprocessable(
+        "DATABASE_URL is set in the environment, which overrides the config file. " +
+          "Unset that environment variable to fall back to the embedded database.",
+      );
+    }
+
+    const current = readConfigFile();
+    if (!current) {
+      throw notFound(
+        "No instance config file found to update — this instance is environment-driven.",
+      );
+    }
+    if (current.database.mode === "embedded-postgres") {
+      throw unprocessable("Already using the embedded database.");
+    }
+    // Flip the mode only. The connectionString is left in place — config.ts
+    // ignores it while mode is embedded-postgres, and keeping it lets the
+    // operator switch back to the same external database in one click later.
+    writeConfigFile({
+      ...current,
+      database: { ...current.database, mode: "embedded-postgres" },
+    });
+
+    const actor = getActorInfo(req);
+    const autoRestart = isUnderDevWatcher();
+    logger.info(
+      {
+        event: "instance.database.reverted_to_embedded",
+        actorType: actor.actorType,
+        actorId: actor.actorId,
+        autoRestart,
+      },
+      "Instance database reverted to embedded Postgres; restart required",
+    );
+
+    scheduleAutoRestart(res, autoRestart);
+    res.json({ persisted: true, restartRequired: true, autoRestart });
+  });
 
   router.get("/instance/database/local-export/preview", async (req, res) => {
     assertCanManageInstanceSettings(req);

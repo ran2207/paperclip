@@ -97,6 +97,11 @@ export const instanceDatabaseApi = {
       "/instance/database/connection",
       { connectionString },
     ),
+  useEmbedded: () =>
+    api.post<{ persisted: boolean; restartRequired: boolean; autoRestart: boolean }>(
+      "/instance/database/use-embedded",
+      {},
+    ),
   previewLocalExport: () =>
     api.get<LocalExportPreview>("/instance/database/local-export/preview"),
   validateLocalExport: (input: { preserveIds: boolean }) =>
